@@ -468,17 +468,7 @@ class Logger:
                 self.StartFailedMode()
 
     def WriterThread(self):
-"""
-        max_loop_time = 0
-        loop_count = 0
-        last_report_time = time.time()
-        max_navpvt_qsize = 0
-        max_ppk_qsize = 0
-"""
-
         while True:
-            loop_start = time.time()
-
             if not self.navPvtQueue.empty():
                 pvtData = self.navPvtQueue.get()
                 if pvtData is None:
@@ -492,53 +482,6 @@ class Logger:
                     self.ppkMsgCounter += 1
                     if self.ppkMsgCounter % 10 == 0:
                         self.ppkLogFilePtr.flush()
-"""
-            # Döngü süresi ölçümü
-            loop_time = (time.time() - loop_start) * 1000  # ms
-            if loop_time > max_loop_time:
-                max_loop_time = loop_time
-
-            # Queue boyutu ölçümü
-            nav_q = self.navPvtQueue.qsize()
-            ppk_q = self.ppkQueue.qsize()
-            if nav_q > max_navpvt_qsize:
-                max_navpvt_qsize = nav_q
-            if ppk_q > max_ppk_qsize:
-                max_ppk_qsize = ppk_q
-
-            loop_count += 1
-            now = time.time()
-            if now - last_report_time >= 1.0:
-                self.LogDiagnostic(
-                    f"[WriterThread] Max Loop: {max_loop_time:.2f} ms | "
-                    f"Max NAV-PVT Q: {max_navpvt_qsize}, Max PPK Q: {max_ppk_qsize} "
-                    f"(in last {loop_count} loops)",
-                    "DEBUG"
-                )
-                max_loop_time = 0
-                loop_count = 0
-                max_navpvt_qsize = 0
-                max_ppk_qsize = 0
-                last_report_time = now
-
-    def MonitorSystem(self):
-        while True:
-            try:
-                navpvt_len = self.navPvtQueue.qsize()
-                ppk_len = self.ppkQueue.qsize()
-                serial_waiting = self.serialPort.in_waiting if self.serialPort.in_waiting else 0
-
-                self.LogDiagnostic(
-                    f"[MONITOR] NAV-PVT Q: {navpvt_len}, PPK Q: {ppk_len}, SerialIn: {serial_waiting} B",
-                    level="DEBUG"
-                )
-
-                time.sleep(1)
-
-            except Exception as e:
-                self.LogDiagnostic(f"[MONITOR ERROR] {e}", "ERROR")
-                break
-"""
 
     def Run(self):
         success = self.ConfigureGNSS()
@@ -549,15 +492,12 @@ class Logger:
 
         writer = threading.Thread(target=self.WriterThread)
         reader = threading.Thread(target=self.ReaderThread)
-        # monitor = threading.Thread(target=self.MonitorSystem)
 
         writer.start()
         reader.start()
-        # monitor.start()
 
         reader.join()
         writer.join()
-        monitor.join()
 
 def StartFTPServer():
     authorizer = DummyAuthorizer()
