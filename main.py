@@ -10,7 +10,7 @@ if platform.system() == "Linux":
         DefaultPort = "/dev/ttyACM0"
 else:
     IS_RPI = False
-    DefaultPort = "COM29"
+    DefaultPort = "COM7"
 
 import time
 import threading
@@ -30,7 +30,7 @@ import subprocess
 
 LOG_FOLDER_PATH = os.path.join(os.getcwd(), "logs")
 MAX_LOG_FILE_SIZE = 30 * 1024 * 1024  # 30 MB
-MAX_PPK_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
+MAX_PPK_FILE_SIZE = 30 * 1024 * 1024  # 30 MB
 
 MinFixGNSSSolution = 2
 FixLedPin = 18
@@ -70,6 +70,9 @@ class Logger:
         self.configChanged = False
         self.configFailed = False
 
+        self.cswWriteCounter = 0
+        self.ppkMsgCounter = 0
+
         if IS_RPI:
             GPIO.setmode(GPIO.BCM)
             GPIO.setup(FixLedPin, GPIO.OUT)
@@ -83,8 +86,7 @@ class Logger:
             self.StartFailedMode()
             return
 
-        self.ubxReader = UBXReader(self.serialPort, protfilter=2)  # It just accepts UBX messages
-
+        self.ubxReader = UBXReader(self.serialPort, protfilter=2, bufsize=8192)  # It just accepts UBX messages
 
     def GetCPUId(self):
         serial = "0000000000000000"
@@ -242,7 +244,10 @@ class Logger:
                      data['gSpeed'], data['sAcc'], data['headOfMot'], data['headAcc'],
                      data['pDOP'], data['headOfVeh'],
                      self.gnssBasedSystemTime.strftime("%H:%M:%S.%f")[:-3], self.rpiSystemTime])
-                file.flush()
+                self.cswWriteCounter += 1
+                if self.cswWriteCounter % 10 == 0:
+                    file.flush()
+
 
     def SetSystemDateandTime(self, data):
         # Set GNSS date & time to system date & time
@@ -354,8 +359,8 @@ class Logger:
 
             # RXM-SFRBX MSG
             sfrbx_poll = UBXMessage('CFG', 'CFG-MSG', POLL, payload=b'\x02\x13')
-            sfrbx_set = UBXMessage('CFG', 'CFG-MSG', SET, payload=b'\x02\x13\x00\x00\x00\x02\x00\x00')
-            apply_and_verify(sfrbx_poll, _check_cfg_msg(19, 2), sfrbx_set, name="SFRBX MSG")
+            sfrbx_set = UBXMessage('CFG', 'CFG-MSG', SET, payload=b'\x02\x13\x00\x00\x00\x0A\x00\x00')
+            apply_and_verify(sfrbx_poll, _check_cfg_msg(19, 10), sfrbx_set, name="SFRBX MSG")
 
             # RXM-RAWX MSG
             rawx_poll = UBXMessage('CFG', 'CFG-MSG', POLL, payload=b'\x02\x15')
@@ -462,20 +467,79 @@ class Logger:
                 self.LogDiagnostic("No GNSS data received in over 60 seconds. Entering FAILED MODE.", "ERROR")
                 self.StartFailedMode()
 
-
     def WriterThread(self):
-            while True:
-                if not self.navPvtQueue.empty():
-                    pvtData = self.navPvtQueue.get()
-                    if pvtData is None:
-                        break
-                    self.WriteCSVLogFile(pvtData)
+"""
+        max_loop_time = 0
+        loop_count = 0
+        last_report_time = time.time()
+        max_navpvt_qsize = 0
+        max_ppk_qsize = 0
+"""
 
-                if not self.ppkQueue.empty():
-                    rawData = self.ppkQueue.get()
-                    if self.ppkLogFilePtr:  # file is open ?
-                        self.ppkLogFilePtr.write(rawData)
+        while True:
+            loop_start = time.time()
+
+            if not self.navPvtQueue.empty():
+                pvtData = self.navPvtQueue.get()
+                if pvtData is None:
+                    break
+                self.WriteCSVLogFile(pvtData)
+
+            if not self.ppkQueue.empty():
+                rawData = self.ppkQueue.get()
+                if self.ppkLogFilePtr:
+                    self.ppkLogFilePtr.write(rawData)
+                    self.ppkMsgCounter += 1
+                    if self.ppkMsgCounter % 10 == 0:
                         self.ppkLogFilePtr.flush()
+"""
+            # Döngü süresi ölçümü
+            loop_time = (time.time() - loop_start) * 1000  # ms
+            if loop_time > max_loop_time:
+                max_loop_time = loop_time
+
+            # Queue boyutu ölçümü
+            nav_q = self.navPvtQueue.qsize()
+            ppk_q = self.ppkQueue.qsize()
+            if nav_q > max_navpvt_qsize:
+                max_navpvt_qsize = nav_q
+            if ppk_q > max_ppk_qsize:
+                max_ppk_qsize = ppk_q
+
+            loop_count += 1
+            now = time.time()
+            if now - last_report_time >= 1.0:
+                self.LogDiagnostic(
+                    f"[WriterThread] Max Loop: {max_loop_time:.2f} ms | "
+                    f"Max NAV-PVT Q: {max_navpvt_qsize}, Max PPK Q: {max_ppk_qsize} "
+                    f"(in last {loop_count} loops)",
+                    "DEBUG"
+                )
+                max_loop_time = 0
+                loop_count = 0
+                max_navpvt_qsize = 0
+                max_ppk_qsize = 0
+                last_report_time = now
+
+    def MonitorSystem(self):
+        while True:
+            try:
+                navpvt_len = self.navPvtQueue.qsize()
+                ppk_len = self.ppkQueue.qsize()
+                serial_waiting = self.serialPort.in_waiting if self.serialPort.in_waiting else 0
+
+                self.LogDiagnostic(
+                    f"[MONITOR] NAV-PVT Q: {navpvt_len}, PPK Q: {ppk_len}, SerialIn: {serial_waiting} B",
+                    level="DEBUG"
+                )
+
+                time.sleep(1)
+
+            except Exception as e:
+                self.LogDiagnostic(f"[MONITOR ERROR] {e}", "ERROR")
+                break
+"""
+
     def Run(self):
         success = self.ConfigureGNSS()
 
@@ -485,18 +549,22 @@ class Logger:
 
         writer = threading.Thread(target=self.WriterThread)
         reader = threading.Thread(target=self.ReaderThread)
+        # monitor = threading.Thread(target=self.MonitorSystem)
 
         writer.start()
         reader.start()
+        # monitor.start()
 
         reader.join()
         writer.join()
+        monitor.join()
+
 def StartFTPServer():
     authorizer = DummyAuthorizer()
     authorizer.add_user("aselsan", "1975", LOG_FOLDER_PATH, perm="elradfmw")
     handler = FTPHandler
     handler.passive_ports = range(30000, 30010)
-    handler.masquerade_address = "192.168.1.28"  
+    handler.masquerade_address = "192.168.1.28"  # Pi'nin IP adresi
     handler.authorizer = authorizer
     server = FTPServer(("0.0.0.0", 2121), handler)
     print("FTP server started on port 2121...")
