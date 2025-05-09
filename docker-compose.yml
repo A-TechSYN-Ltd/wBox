@@ -1,0 +1,21 @@
+version: "3.9"
+
+services:
+  wbox:
+    build: .
+    container_name: wboxLogger
+
+    restart: always
+
+    ports:
+      - "2121:2121"
+      - "30000-30009:30000-30009"
+    volumes:
+      - ./logs:/app/logs
+
+    devices:
+      - "/dev/ttyACM0:/dev/ttyACM0"
+      - "/dev/gpiomem:/dev/gpiomem"  # GPIO support
+
+    privileged: true
+    working_dir: /app
