@@ -10,7 +10,7 @@ if platform.system() == "Linux":
         DefaultPort = "/dev/ttyACM0"
 else:
     IS_RPI = False
-    DefaultPort = "COM30"
+    DefaultPort = "COM7"
 
 import time
 import threading
@@ -193,8 +193,7 @@ class Logger:
                      'Latitude(deg)', 'Longitude(deg)', 'Altitude(m)', 'AltitudeMSL(m)', 'hAcc(m)', 'vAcc(m)',
                      'NEDNorth(m/s)', 'NEDEast(m/s)', 'NEDDown(m/s)',
                      'GroundSpeed(m/s)', 'SpeedAccuracy(m/s)', 'HeadingOfMotion(deg)', 'HeadingAccuracy(deg)',
-                     'PositionDOP', 'HeadingOfVehicle(deg)',
-                     'GNSSTime', 'SystemTime'])
+                     'PositionDOP', 'GNSSTime', 'SystemTime'])
                 file.flush()
         except Exception as e:
             self.LogDiagnostic(f"CreateLogFile error: {e}", "ERROR")
@@ -241,7 +240,7 @@ class Logger:
                      data['lat'], data['lon'], data['height'], data['hMSL'], data['hAcc'], data['vAcc'],
                      data['velN'], data['velE'], data['velD'],
                      data['gSpeed'], data['sAcc'], data['headOfMot'], data['headAcc'],
-                     data['pDOP'], data['headOfVeh'],
+                     data['pDOP'],
                      self.gnssBasedSystemTime.strftime("%H:%M:%S.%f")[:-3], self.rpiSystemTime])
                 self.cswWriteCounter += 1
                 if self.cswWriteCounter % 10 == 0:
@@ -335,7 +334,10 @@ class Logger:
                 self.configFailed = True
                 return False
             for attempt in range(1, max_retries + 1):
-                self.serialPort.write(set_msg.serialize())
+                if name == "GNSS Sats":
+                    self.serialPort.write(set_msg)
+                else:
+                    self.serialPort.write(set_msg.serialize())
                 self.configChanged = True
                 self.LogDiagnostic(f"{name}: SET sent (attempt {attempt}), verifying...")
                 if _send_and_wait(poll_msg, verify_func, timeout):
@@ -365,6 +367,20 @@ class Logger:
             airborne4g_set = UBXMessage('CFG', 'CFG-NAV5', SET, payload=b'\xFF\xFF\x08\x03\x00\x00\x00\x00\x10\x27\x00\x00\x05\x00\xFA\x00\xFA\x00\x64\x00\x2c\x01\x00\x00\x00\x00\x10\x27\x00\x00\x00\x00\x00\x00\x00\x00')
             apply_and_verify(airborne4g_poll, _check_cfg_nav5(36, 8), airborne4g_set, name="Airborne")
 
+            data = bytes([
+                0xB5, 0x62, 0x06, 0x8A, 0x5E, 0x00, 0x01, 0x05, 0x00, 0x00, 0x01, 0x00, 0x31, 0x10, 0x01, 0x03, 0x00,
+                0x31, 0x10, 0x01, 0x05, 0x00, 0x31, 0x10, 0x01, 0x07, 0x00, 0x31, 0x10, 0x01, 0x0A, 0x00,
+                0x31, 0x10, 0x01, 0x0D, 0x00, 0x31, 0x10, 0x00, 0x0E, 0x00, 0x31, 0x10, 0x00, 0x12, 0x00,
+                0x31, 0x10, 0x00, 0x14, 0x00, 0x31, 0x10, 0x00, 0x15, 0x00, 0x31, 0x10, 0x00, 0x18, 0x00,
+                0x31, 0x10, 0x01, 0x1A, 0x00, 0x31, 0x10, 0x01, 0x1F, 0x00, 0x31, 0x10, 0x01, 0x20, 0x00,
+                0x31, 0x10, 0x01, 0x21, 0x00, 0x31, 0x10, 0x01, 0x22, 0x00, 0x31, 0x10, 0x00, 0x24, 0x00,
+                0x31, 0x10, 0x00, 0x25, 0x00, 0x31, 0x10, 0x01, 0xFE, 0x58
+            ])
+
+            gnss_gps_poll = UBXMessage('CFG', 'CFG-GNSS', POLL)
+            gnss_gps_set = data
+            apply_and_verify(gnss_gps_poll, _check_cfg_gnss(), gnss_gps_set, name="GNSS Sats")
+
             # RXM-SFRBX MSG
             sfrbx_poll = UBXMessage('CFG', 'CFG-MSG', POLL, payload=b'\x02\x13')
             sfrbx_set = UBXMessage('CFG', 'CFG-MSG', SET, payload=b'\x02\x13\x00\x00\x00\x05\x00\x00')
@@ -379,20 +395,6 @@ class Logger:
             navpvt_poll = UBXMessage('CFG', 'CFG-MSG', POLL, payload=b'\x01\x07')
             navpvt_set = UBXMessage('CFG', 'CFG-MSG', SET, payload=b'\x01\x07\x00\x00\x00\x01\x00\x00')
             apply_and_verify(navpvt_poll, _check_cfg_msg(7, 1), navpvt_set, name="NAV-PVT MSG")
-
-            data = bytes([
-                0x00, 0x01, 0x05, 0x00, 0x00, 0x01, 0x00, 0x31, 0x10, 0x01, 0x03, 0x00, 0x31, 0x10, 0x01,
-                0x05, 0x00, 0x31, 0x10, 0x01, 0x07, 0x00, 0x31, 0x10, 0x01, 0x0A, 0x00, 0x31, 0x10, 0x01,
-                0x0D, 0x00, 0x31, 0x10, 0x00, 0x0E, 0x00, 0x31, 0x10, 0x00, 0x12, 0x00, 0x31, 0x10, 0x00,
-                0x14, 0x00, 0x31, 0x10, 0x00, 0x15, 0x00, 0x31, 0x10, 0x00, 0x18, 0x00, 0x31, 0x10, 0x01,
-                0x1A, 0x00, 0x31, 0x10, 0x01, 0x1F, 0x00, 0x31, 0x10, 0x01, 0x20, 0x00, 0x31, 0x10, 0x01,
-                0x21, 0x00, 0x31, 0x10, 0x01, 0x22, 0x00, 0x31, 0x10, 0x00, 0x24, 0x00, 0x31, 0x10, 0x00,
-                0x25, 0x00, 0x31, 0x10, 0x01
-            ])
-
-            gnss_gps_poll = UBXMessage('CFG', 'CFG-GNSS', POLL)
-            gnss_gps_set = UBXMessage('CFG', 'CFG-GNSS', SET, payload=data)
-            apply_and_verify(gnss_gps_poll, _check_cfg_gnss(), gnss_gps_set, name="GNSS Sats")
 
             # If settings changed, save current configs in flash
             if self.configChanged:
@@ -436,10 +438,10 @@ class Logger:
                         'velD': parsedData.velD / 1000,
                         'gSpeed': parsedData.gSpeed / 1000, 'sAcc': parsedData.sAcc / 1000,
                         'headOfMot': parsedData.headMot, 'headAcc': parsedData.headAcc,
-                        'pDOP': parsedData.pDOP, 'headOfVeh': parsedData.headVeh,
+                        'pDOP': parsedData.pDOP
                     }
-                    self.fixType = parsedData.fixType
 
+                    self.fixType = parsedData.fixType
                     # Set gnssBasedTime struct according to GNSS date and time
                     if parsedData.validTime:
                         self.SetSystemDateandTime(pvtData)
